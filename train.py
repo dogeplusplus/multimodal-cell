@@ -45,7 +45,7 @@ def correlation_score(y_true, y_pred):
 
 
 @timer
-def train(X_train, y_train, X_val, n_estimators, lightgbm_params):
+def train(X_train, y_train, n_estimators, lightgbm_params):
     model = lightgbm.LGBMRegressor(n_estimators=n_estimators, **lightgbm_params)
     model.fit(X_train, y_train)
     return model
@@ -192,7 +192,7 @@ def main():
             # models = []
             val_pred = []
             for i in range(y_cols):
-                model = train(X_train, y_train[:, i].copy(), X_val, n_estimators, lightgbm_params)
+                model = train(X_train, y_train[:, i].copy(), n_estimators, lightgbm_params)
                 pred = validate(model, X_val)
                 val_pred.append(pred)
 
