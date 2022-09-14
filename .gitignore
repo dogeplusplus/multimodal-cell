@@ -1,3 +1,4 @@
 open_problems_multimodal/*
+precomputed_svd/*
 *.npy
 *.pkl

@@ -1,11 +1,14 @@
 import gc
+import uuid
 import time
 import json
 import scipy
 import pickle
+import hashlib
 import logging
 import lightgbm
 import functools
+import typing as t
 import numpy as np
 import pandas as pd
 
@@ -19,6 +22,27 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def check_svd(svd_dir: Path, array: np.array, new_config: t.Dict[str, t.Any]) -> t.Union[str, bool]:
+    for run in svd_dir.iterdir():
+        run_config_path = run / "config.json"
+        with open(run_config_path) as f:
+            run_config = json.load(f)
+
+        md5_array = hashlib.md5(str(array).encode("utf-8")).hexdigest()
+        if md5_array != run_config["md5"]:
+            continue
+
+        for param, value in new_config.items():
+            if run_config[param] != value:
+                continue
+
+        # Return folder if data and config are the same
+        return run
+
+    # No existing run matches this configuration
+    return False
+
+
 def timer(func):
     @functools.wraps(func)
     def wrapper_timer(*args, **kwargs):
@@ -30,6 +54,76 @@ def timer(func):
         return value
 
     return wrapper_timer
+
+
+@timer
+def run_svd(
+    array: np.array,
+    n_components: int = 512,
+    random_state: int = 1,
+    n_iter: int = 5,
+    algorithm: str = "randomized",
+    n_oversamples: int = 10,
+    power_iteration_normalizer: str = "auto",
+    tol: float = 0.0,
+    folder: Path = Path("precomputed_svd"),
+) -> t.Tuple[np.array, TruncatedSVD]:
+    # Store MD5 of array before SVD to avoid repeating work
+    configuration = dict(
+        md5=hashlib.md5(str(array).encode("utf-8")).hexdigest(),
+        random_state=random_state,
+        n_components=n_components,
+        algorithm=algorithm,
+        n_iter=n_iter,
+        n_oversamples=n_oversamples,
+        power_iteration_normalizer=power_iteration_normalizer,
+        tol=tol,
+    )
+
+    existing_run = check_svd(folder, array, configuration)
+    # Load existing SVD if it exists already
+    if not existing_run:
+        logger.info("SVD with this configuration computed already")
+        reduced_path = existing_run / "reduced.npy"
+        algorithm_path = existing_run / "svd.pkl"
+
+        with open(algorithm_path, "rb") as f:
+            svd = pickle.load(f)
+
+        reduced = np.load(reduced_path)
+    # Otherwise create a new one
+    else:
+        logger.info(f"Shape before SVD: {array.shape}")
+        svd = TruncatedSVD(
+            n_components,
+            random_state=random_state,
+            algorithm=algorithm,
+            n_iter=n_iter,
+            n_oversamples=n_oversamples,
+            power_iteration_normalizer=power_iteration_normalizer,
+            tol=tol,
+        )
+        random_id = str(uuid.uuid4())
+
+        results_path = folder / random_id
+        results_path.mkdir()
+
+        array_path = results_path / "reduced.npy"
+        algorithm_path = results_path / "svd.pkl"
+        config_path = results_path / "config.json"
+
+        reduced = svd.fit_transform(array)
+        logger.info(f"Shape after SVD: {array.shape}")
+
+        np.save(array_path, reduced)
+        with open(algorithm_path, "wb") as f:
+            pickle.dump(svd, f)
+
+        with open(config_path, "w") as f:
+            json.dump(configuration, f, indent=4)
+        logger.info(f"SVD completed and stored in {str(results_path)}")
+
+    return reduced, svd
 
 
 def correlation_score(y_true, y_pred):
@@ -119,36 +213,13 @@ def main():
 
     X_test = csr_matrix(X_test.values)
 
-    logger.info(f"Original X shape: {X.shape} {X.size * 4 / 1024 ** 3:2.3f} GByte")
-    logger.info(f"Original X_test shape: {X_test.shape} {X_test.size * 4 / 1024 ** 3:2.3f} GByte")
+    logger.info(f"Original X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
+    logger.info(f"Original X_test shape: {X_test.shape} {X_test.size * (4 / 1024 ** 3):2.3f} GByte")
 
-    # Run once to generate singular values and then serialize them
-    both_path = Path("singular_values.npy")
     both = scipy.sparse.vstack([X, X_test])
     assert both.shape[0] == 119651
 
-    @timer
-    def run_svd(both, n_components=512, random_state=1):
-        logger.info(f"Shape before SVD: {both.shape}")
-        svd = TruncatedSVD(n_components, random_state=random_state)
-
-        both = svd.fit_transform(both)
-        logger.info(f"Shape after SVD: {both.shape}")
-
-        np.save(both_path, both)
-        with open("svd.pkl", "wb") as f:
-            pickle.dump(svd, f)
-
-        return both, svd
-
-    # both, svd = run_svd(both)
-
-    # logger.info("SVD Completed")
-    # Load pre-computed SVD
-    # with open("svd.pkl", "rb") as f:
-    #     svd = pickle.load(f)
-
-    both = np.load(both_path)
+    both, svd = run_svd(both)
 
     X = both[:70988]
     X_test = both[70988:]
@@ -172,6 +243,8 @@ def main():
         "colsample_bytree": 0.8,
         "subsample": 0.6,
         "seed": 1,
+        "device": "gpu",
+        "verbosity": -1,
     }
 
     if CROSS_VALIDATE:
@@ -212,8 +285,9 @@ def main():
             score_list.append((mse, corrscore))
             break
 
-    # if len(score_list) > 1:
-    #     result_df = pd.DataFrame(score_list, columns=["mse", "corrscore"])
+    if len(score_list) >= 1:
+        result_df = pd.DataFrame(score_list, columns=["mse", "corrscore"])
+        result_df.to_csv("results.csv")
 
 
 if __name__ == "__main__":
