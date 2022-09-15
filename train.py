@@ -262,7 +262,6 @@ def main():
             X_val = X[val_idx]
             y_val = Y[:, :y_cols][val_idx]
 
-            # models = []
             val_pred = []
             for i in range(y_cols):
                 model = train(X_train, y_train[:, i].copy(), n_estimators, lightgbm_params)
