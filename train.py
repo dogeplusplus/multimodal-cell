@@ -1,9 +1,9 @@
-import gc
 import uuid
 import time
 import json
 import scipy
 import pickle
+import mlflow
 import hashlib
 import logging
 import lightgbm
@@ -80,12 +80,12 @@ def run_svd(
         tol=tol,
     )
 
-    existing_run = check_svd(folder, array, configuration)
+    run_id = check_svd(folder, array, configuration)
     # Load existing SVD if it exists already
-    if not existing_run:
+    if run_id:
         logger.info("SVD with this configuration computed already")
-        reduced_path = existing_run / "reduced.npy"
-        algorithm_path = existing_run / "svd.pkl"
+        reduced_path = run_id / "reduced.npy"
+        algorithm_path = run_id / "svd.pkl"
 
         with open(algorithm_path, "rb") as f:
             svd = pickle.load(f)
@@ -93,6 +93,7 @@ def run_svd(
         reduced = np.load(reduced_path)
     # Otherwise create a new one
     else:
+        logger.info("SVD with this configuration not cached. Creating new SVD run")
         logger.info(f"Shape before SVD: {array.shape}")
         svd = TruncatedSVD(
             n_components,
@@ -103,9 +104,9 @@ def run_svd(
             power_iteration_normalizer=power_iteration_normalizer,
             tol=tol,
         )
-        random_id = str(uuid.uuid4())
+        run_id = str(uuid.uuid4())
 
-        results_path = folder / random_id
+        results_path = folder / run_id
         results_path.mkdir()
 
         array_path = results_path / "reduced.npy"
@@ -123,7 +124,7 @@ def run_svd(
             json.dump(configuration, f, indent=4)
         logger.info(f"SVD completed and stored in {str(results_path)}")
 
-    return reduced, svd
+    return reduced, svd, run_id
 
 
 def correlation_score(y_true, y_pred):
@@ -139,22 +140,16 @@ def correlation_score(y_true, y_pred):
 
 
 @timer
-def train(X_train, y_train, n_estimators, lightgbm_params):
-    model = lightgbm.LGBMRegressor(n_estimators=n_estimators, **lightgbm_params)
+def train(X_train, y_train, lightgbm_params):
+    model = lightgbm.LGBMRegressor(**lightgbm_params)
     model.fit(X_train, y_train)
     return model
 
 
-@timer
-def validate(model, X_val):
-    predictions = model.predict(X_val)
-    return predictions
-
-
-def train_full(X_train, Y_train, X_test, lightgbm_params, n_estimators):
+def train_full(X_train, Y_train, X_test, lightgbm_params):
     test_predictions = []
     for i in range(Y_train.shape[1]):
-        model = lightgbm.LGBMRegressor(n_estimators=n_estimators, **lightgbm_params)
+        model = lightgbm.LGBMRegressor(**lightgbm_params)
         model.fit(X_train, Y_train[:i].copy())
 
         preds = model.predict(X_test)
@@ -182,9 +177,6 @@ def main():
     # FP_SUBMISSION = DATA_DIR / "sample_submission.csv"
     # FP_EVALUATION_IDS = DATA_DIR / "evaluation_ids.csv"
 
-    CROSS_VALIDATE = True
-    # SUBMIT = True
-
     COLUMNS_PATH = Path("multimodal_columns.json")
     with open(COLUMNS_PATH) as f:
         columns = json.load(f)
@@ -201,37 +193,23 @@ def main():
     meta = metadata_df.reindex(cell_index)
     X0 = X[important_cols].values
 
-    gc.collect()
+    # SVD performed on the combined train and test set
     X = csr_matrix(X.values)
-    gc.collect()
-
     X_test = pd.read_hdf(FP_CITE_TEST_INPUTS).drop(columns=constant_cols)
-    # cell_index_test = X_test.index
-    # meta_test = metadata_df.reindex(cell_index_test)
-    X0_test = X_test[important_cols].values
-    gc.collect()
-
     X_test = csr_matrix(X_test.values)
 
     logger.info(f"Original X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
     logger.info(f"Original X_test shape: {X_test.shape} {X_test.size * (4 / 1024 ** 3):2.3f} GByte")
 
-    both = scipy.sparse.vstack([X, X_test])
-    assert both.shape[0] == 119651
+    combined = scipy.sparse.vstack([X, X_test])
+    assert combined.shape[0] == 119651
+    reduced, _, run_id = run_svd(combined)
 
-    both, svd = run_svd(both)
-
-    X = both[:70988]
-    X_test = both[70988:]
-    del both
-
+    X = reduced[:70988]
+    X_test = reduced[70988:]
     X = np.hstack([X, X0])
-    # Figure out why x[0] is only (656,) and missing all the rows
-    X_test = np.hstack([X_test, X0_test])
 
     logger.info(f"Reduced X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
-    logger.info(f"Reduced X_test shape: {X.shape} {X_test.size * (4 / 1024 ** 3):2.3f} GByte")
-
     Y = pd.read_hdf(FP_CITE_TRAIN_TARGETS)
     Y = Y.values
 
@@ -245,48 +223,40 @@ def main():
         "seed": 1,
         "device": "gpu",
         "verbosity": -1,
+        "n_estimators": 300,
     }
 
-    if CROSS_VALIDATE:
-        y_cols = Y.shape[1]
-        n_estimators = 300
+    y_cols = Y.shape[1]
+    n_splits = 3
+    kf = GroupKFold(n_splits=n_splits)
+    mses = []
+    corrscores = []
 
-        kf = GroupKFold(n_splits=3)
-        score_list = []
+    for train_idx, val_idx in kf.split(X, groups=meta.donor):
+        X_train = X[train_idx]
+        y_train = Y[:, :y_cols][train_idx]
+        X_val = X[val_idx]
+        y_val = Y[:, :y_cols][val_idx]
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(X, groups=meta.donor)):
-            model = None
-            gc.collect()
-            X_train = X[train_idx]
-            y_train = Y[:, :y_cols][train_idx]
-            X_val = X[val_idx]
-            y_val = Y[:, :y_cols][val_idx]
+        val_pred = []
+        for i in range(y_cols):
+            model = train(X_train, y_train[:, i].copy(), lightgbm_params)
+            validation_pred = model.predict(X_val)
+            val_pred.append(validation_pred)
 
-            val_pred = []
-            for i in range(y_cols):
-                model = train(X_train, y_train[:, i].copy(), n_estimators, lightgbm_params)
-                pred = validate(model, X_val)
-                val_pred.append(pred)
+        y_val_pred = np.column_stack(val_pred)
 
-            y_val_pred = np.column_stack(val_pred)
-            del val_pred
-            del X_train, y_train, X_val
-            gc.collect()
+        mse = mean_squared_error(y_val, y_val_pred)
+        corrscore = correlation_score(y_val, y_val_pred)
+        mses.append(mse)
+        corrscores.append(corrscore)
+        logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
-            mse = mean_squared_error(y_val, y_val_pred)
-            corrscore = correlation_score(y_val, y_val_pred)
-
-            logger.info(f"Mean squared error: {mse}")
-            logger.info(f"Correlation score: {corrscore}")
-
-            del y_val
-            logger.info(f"Fold {fold} {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
-            score_list.append((mse, corrscore))
-            break
-
-    if len(score_list) >= 1:
-        result_df = pd.DataFrame(score_list, columns=["mse", "corrscore"])
-        result_df.to_csv("results.csv")
+    mlflow.log_params(lightgbm_params)
+    mlflow.param("splits", n_splits)
+    mlflow.log_param("run_id", run_id)
+    mlflow.log_metric("mse", np.mean(mses))
+    mlflow.log_metric("corrscore", np.mean(corrscores))
 
 
 if __name__ == "__main__":
