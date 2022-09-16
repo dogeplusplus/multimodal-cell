@@ -253,7 +253,7 @@ def main():
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
     mlflow.log_params(lightgbm_params)
-    mlflow.param("splits", n_splits)
+    mlflow.log_param("splits", n_splits)
     mlflow.log_param("run_id", run_id)
     mlflow.log_metric("mse", np.mean(mses))
     mlflow.log_metric("corrscore", np.mean(corrscores))
