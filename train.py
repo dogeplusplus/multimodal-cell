@@ -1,131 +1,25 @@
-import uuid
 import time
 import json
 import scipy
-import pickle
 import mlflow
-import hashlib
 import logging
 import lightgbm
-import functools
 import typing as t
 import numpy as np
 import pandas as pd
 
+from tqdm import tqdm
 from pathlib import Path
 from scipy.sparse import csr_matrix
 from tempfile import TemporaryDirectory
-from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
 
+from data.svd import run_svd, timer
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def check_svd(svd_dir: Path, array: np.array, new_config: t.Dict[str, t.Any]) -> t.Union[str, bool]:
-    for run in svd_dir.iterdir():
-        run_config_path = run / "config.json"
-        with open(run_config_path) as f:
-            run_config = json.load(f)
-
-        md5_array = hashlib.md5(str(array).encode("utf-8")).hexdigest()
-        if md5_array != run_config["md5"]:
-            continue
-
-        for param, value in new_config.items():
-            if run_config[param] != value:
-                continue
-
-        # Return folder if data and config are the same
-        return run
-
-    # No existing run matches this configuration
-    return False
-
-
-def timer(func):
-    @functools.wraps(func)
-    def wrapper_timer(*args, **kwargs):
-        tic = time.perf_counter()
-        value = func(*args, **kwargs)
-        toc = time.perf_counter()
-        elapsed = toc - tic
-        logger.info(f"Function Elapsed time {func.__name__}: {elapsed:0.4f} seconds")
-        return value
-
-    return wrapper_timer
-
-
-@timer
-def run_svd(
-    array: np.array,
-    n_components: int = 512,
-    random_state: int = 1,
-    n_iter: int = 5,
-    algorithm: str = "randomized",
-    n_oversamples: int = 10,
-    power_iteration_normalizer: str = "auto",
-    tol: float = 0.0,
-    folder: Path = Path("precomputed_svd"),
-) -> t.Tuple[np.array, TruncatedSVD]:
-    # Store MD5 of array before SVD to avoid repeating work
-    configuration = dict(
-        md5=hashlib.md5(str(array).encode("utf-8")).hexdigest(),
-        random_state=random_state,
-        n_components=n_components,
-        algorithm=algorithm,
-        n_iter=n_iter,
-        n_oversamples=n_oversamples,
-        power_iteration_normalizer=power_iteration_normalizer,
-        tol=tol,
-    )
-
-    run_id = check_svd(folder, array, configuration)
-    # Load existing SVD if it exists already
-    if run_id:
-        logger.info("SVD with this configuration computed already")
-        reduced_path = run_id / "reduced.npy"
-        algorithm_path = run_id / "svd.pkl"
-
-        with open(algorithm_path, "rb") as f:
-            svd = pickle.load(f)
-
-        reduced = np.load(reduced_path)
-    # Otherwise create a new one
-    else:
-        logger.info("SVD with this configuration not cached. Creating new SVD run")
-        logger.info(f"Shape before SVD: {array.shape}")
-        svd = TruncatedSVD(
-            n_components,
-            random_state=random_state,
-            algorithm=algorithm,
-            n_iter=n_iter,
-            n_oversamples=n_oversamples,
-            power_iteration_normalizer=power_iteration_normalizer,
-            tol=tol,
-        )
-        run_id = str(uuid.uuid4())
-
-        results_path = folder / run_id
-        results_path.mkdir()
-
-        array_path = results_path / "reduced.npy"
-        algorithm_path = results_path / "svd.pkl"
-        config_path = results_path / "config.json"
-
-        reduced = svd.fit_transform(array)
-        logger.info(f"Shape after SVD: {array.shape}")
-
-        np.save(array_path, reduced)
-        with open(algorithm_path, "wb") as f:
-            pickle.dump(svd, f)
-
-        with open(config_path, "w") as f:
-            json.dump(configuration, f, indent=4)
-        logger.info(f"SVD completed and stored in {str(results_path)}")
-
-    return reduced, svd, run_id
 
 
 def correlation_score(y_true, y_pred):
@@ -147,38 +41,16 @@ def train(X_train, y_train, lightgbm_params):
     return model
 
 
-def train_full(X_train, Y_train, X_test, lightgbm_params):
-    test_predictions = []
-    for i in range(Y_train.shape[1]):
-        model = lightgbm.LGBMRegressor(**lightgbm_params)
-        model.fit(X_train, Y_train[:i].copy())
-
-        preds = model.predict(X_test)
-        test_predictions.append(preds)
-
-    test_pred = np.column_stack(test_predictions)
-    del test_predictions
-
-    return test_pred
-
-
 @timer
-def cross_validation():
+def cross_validation(lightgbm_params):
     DATA_DIR = Path("open_problems_multimodal")
     FP_CELL_METADATA = DATA_DIR / "metadata.csv"
-
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
     FP_CITE_TEST_INPUTS = DATA_DIR / "test_cite_inputs.h5"
+    COLUMNS_PATH = DATA_DIR / "multimodal_columns.json"
 
-    # FP_MULTIOME_TRAIN_INPUTS = DATA_DIR / "train_multi_inputs.h5"
-    # FP_MULTIOME_TRAIN_TARGETS = DATA_DIR / "train_multi_targets.h5"
-    # FP_MULTIOME_TRAIN_INPUTS = DATA_DIR / "test_multi_inputs.h5"
-
-    # FP_SUBMISSION = DATA_DIR / "sample_submission.csv"
-    # FP_EVALUATION_IDS = DATA_DIR / "evaluation_ids.csv"
-
-    COLUMNS_PATH = Path("multimodal_columns.json")
+    start = time.time()
     with open(COLUMNS_PATH) as f:
         columns = json.load(f)
 
@@ -214,19 +86,6 @@ def cross_validation():
     Y = pd.read_hdf(FP_CITE_TRAIN_TARGETS)
     Y = Y.values
 
-    lightgbm_params = {
-        "learning_rate": 0.1,
-        "max_depth": 10,
-        "num_leaves": 200,
-        "min_child_samples": 250,
-        "colsample_bytree": 0.8,
-        "subsample": 0.6,
-        "seed": 1,
-        "device": "gpu",
-        "verbosity": -1,
-        "n_estimators": 300,
-    }
-
     y_cols = Y.shape[1]
     n_splits = 3
     kf = GroupKFold(n_splits=n_splits)
@@ -239,13 +98,13 @@ def cross_validation():
         X_val = X[val_idx]
         y_val = Y[:, :y_cols][val_idx]
 
-        val_pred = []
-        for i in range(y_cols):
-            model = train(X_train, y_train[:, i].copy(), lightgbm_params)
-            validation_pred = model.predict(X_val)
-            val_pred.append(validation_pred)
+        y_val_pred = []
+        for i in tqdm(range(y_cols)):
+            model = lightgbm.LGBMRegressor(**lightgbm_params)
+            model.fit(X_train, y_train[:, i].copy())
+            y_val_pred.append(model.predict(X_val))
 
-        y_val_pred = np.column_stack(val_pred)
+        y_val_pred = np.column_stack(y_val_pred)
 
         mse = mean_squared_error(y_val, y_val_pred)
         corrscore = correlation_score(y_val, y_val_pred)
@@ -253,11 +112,14 @@ def cross_validation():
         corrscores.append(corrscore)
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
+    end = time.time()
     mlflow.log_params(lightgbm_params)
     mlflow.log_param("splits", n_splits)
     mlflow.log_param("run_id", run_id)
     mlflow.log_metric("mse", np.mean(mses))
     mlflow.log_metric("corrscore", np.mean(corrscores))
+    mlflow.log_metric("duration", end - start)
+    mlflow.sklearn.log_model(model, "model")
 
 
 @timer
@@ -266,7 +128,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
     FP_CITE_TEST_INPUTS = DATA_DIR / "test_cite_inputs.h5"
-    COLUMNS_PATH = Path("multimodal_columns.json")
+    COLUMNS_PATH = DATA_DIR / "multimodal_columns.json"
 
     with open(COLUMNS_PATH) as f:
         columns = json.load(f)
@@ -301,7 +163,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     test_predictions = []
     y_cols = Y.shape[1]
 
-    for i in range(y_cols):
+    for i in tqdm(range(y_cols)):
         model = lightgbm.LGBMRegressor(**lightgbm_params)
         model.fit(X, Y[:, i].copy())
         test_predictions.append(model.predict(X_test))
@@ -322,7 +184,8 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
         temp_file = Path(temp_dir) / "submission.csv"
         submission.to_csv(temp_file)
         mlflow.log_artifact(temp_file)
-        mlflow.log_params(lightgbm_params)
+
+    mlflow.log_params(lightgbm_params)
 
 
 if __name__ == "__main__":
@@ -338,4 +201,5 @@ if __name__ == "__main__":
         "verbosity": -1,
         "n_estimators": 300,
     }
-    create_submission(lightgbm_params)
+    # create_submission(lightgbm_params)
+    cross_validation(lightgbm_params)
