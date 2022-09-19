@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 import scipy
 import mlflow
@@ -35,14 +36,31 @@ def correlation_score(y_true, y_pred):
 
 
 @timer
-def train(X_train, y_train, lightgbm_params):
-    model = lightgbm.LGBMRegressor(**lightgbm_params)
-    model.fit(X_train, y_train)
-    return model
+def train_fold(
+    model: lightgbm.LGBMModel,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+) -> t.Tuple[float, float, float, float]:
+    y_val_pred = []
+    y_cols = y_train.shape[1]
+    for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
+        model_col = deepcopy(model)
+        model_col.fit(X_train, y_train[:, i].copy())
+        y_val_pred.append(model_col.predict(X_val))
+    y_val_pred = np.column_stack(y_val_pred)
+
+    col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
+    col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
+    mse = np.mean(col_mse)
+    corrscore = np.mean(col_corr)
+
+    return col_mse, mse, col_corr, corrscore
 
 
 @timer
-def cross_validation(lightgbm_params):
+def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
     DATA_DIR = Path("open_problems_multimodal")
     FP_CELL_METADATA = DATA_DIR / "metadata.csv"
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
@@ -93,30 +111,17 @@ def cross_validation(lightgbm_params):
     corrscores = []
     mses_column = []
     corrscores_column = []
+    model = lightgbm.LGBMRegressor(**lightgbm_params)
 
     for train_idx, val_idx in kf.split(X, groups=meta.donor):
         X_train = X[train_idx]
         y_train = Y[:, :y_cols][train_idx]
         X_val = X[val_idx]
         y_val = Y[:, :y_cols][val_idx]
-
-        y_val_pred = []
-        for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
-            model = lightgbm.LGBMRegressor(**lightgbm_params)
-            model.fit(X_train, y_train[:, i].copy())
-            y_val_pred.append(model.predict(X_val))
-
-        y_val_pred = np.column_stack(y_val_pred)
-
-        col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
-        col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
+        col_mse, mse, col_corr, corrscore = train_fold(model, X_train, y_train, X_val, y_val)
 
         mses_column.append(col_mse)
         corrscores_column.append(col_corr)
-
-        mse = np.mean(col_mse)
-        corrscore = np.mean(col_corr)
-
         mses.append(mse)
         corrscores.append(corrscore)
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
