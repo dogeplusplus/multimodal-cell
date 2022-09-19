@@ -1,4 +1,3 @@
-import time
 import json
 import scipy
 import mlflow
@@ -12,6 +11,7 @@ from tqdm import tqdm
 from pathlib import Path
 from scipy.sparse import csr_matrix
 from tempfile import TemporaryDirectory
+from pretty_html_table import build_table
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
 
@@ -50,7 +50,6 @@ def cross_validation(lightgbm_params):
     FP_CITE_TEST_INPUTS = DATA_DIR / "test_cite_inputs.h5"
     COLUMNS_PATH = DATA_DIR / "multimodal_columns.json"
 
-    start = time.time()
     with open(COLUMNS_PATH) as f:
         columns = json.load(f)
 
@@ -76,7 +75,7 @@ def cross_validation(lightgbm_params):
 
     combined = scipy.sparse.vstack([X, X_test])
     assert combined.shape[0] == 119651
-    reduced, _, run_id = run_svd(combined)
+    reduced, run_id = run_svd(combined)
 
     X = reduced[:70988]
     X_test = reduced[70988:]
@@ -84,13 +83,16 @@ def cross_validation(lightgbm_params):
 
     logger.info(f"Reduced X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
     Y = pd.read_hdf(FP_CITE_TRAIN_TARGETS)
+    y_col_names = Y.columns
     Y = Y.values
-
     y_cols = Y.shape[1]
     n_splits = 3
     kf = GroupKFold(n_splits=n_splits)
+
     mses = []
     corrscores = []
+    mses_column = []
+    corrscores_column = []
 
     for train_idx, val_idx in kf.split(X, groups=meta.donor):
         X_train = X[train_idx]
@@ -99,27 +101,52 @@ def cross_validation(lightgbm_params):
         y_val = Y[:, :y_cols][val_idx]
 
         y_val_pred = []
-        for i in tqdm(range(y_cols)):
+        for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
             model = lightgbm.LGBMRegressor(**lightgbm_params)
             model.fit(X_train, y_train[:, i].copy())
             y_val_pred.append(model.predict(X_val))
 
         y_val_pred = np.column_stack(y_val_pred)
 
-        mse = mean_squared_error(y_val, y_val_pred)
-        corrscore = correlation_score(y_val, y_val_pred)
+        col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
+        col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
+
+        mses_column.append(col_mse)
+        corrscores_column.append(col_corr)
+
+        mse = np.mean(col_mse)
+        corrscore = np.mean(col_corr)
+
         mses.append(mse)
         corrscores.append(corrscore)
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
-    end = time.time()
+    mse_df = pd.DataFrame(
+        list(zip(y_col_names, np.mean(mses_column, axis=0))),
+        columns=["column", "mse"],
+    ).sort_values(by="mse", ascending=False)
+    corr_df = pd.DataFrame(
+        list(zip(y_col_names, np.mean(corrscores_column, axis=0))),
+        columns=["column", "corrscore"],
+    ).sort_values(by="corrscore", ascending=True)
+
+    with TemporaryDirectory() as temp_dir:
+        mse_table = build_table(mse_df, "blue_light")
+        with open(Path(temp_dir, "mse.html"), "w") as f:
+            f.write(mse_table)
+
+        corr_table = build_table(corr_df, "blue_light")
+        with open(Path(temp_dir, "corrscore.html"), "w") as f:
+            f.write(corr_table)
+
+        mlflow.log_artifact(Path(temp_dir, "mse.html"))
+        mlflow.log_artifact(Path(temp_dir, "corrscore.html"))
+
     mlflow.log_params(lightgbm_params)
     mlflow.log_param("splits", n_splits)
     mlflow.log_param("run_id", run_id)
     mlflow.log_metric("mse", np.mean(mses))
     mlflow.log_metric("corrscore", np.mean(corrscores))
-    mlflow.log_metric("duration", end - start)
-    mlflow.sklearn.log_model(model, "model")
 
 
 @timer
@@ -147,7 +174,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
 
     combined = scipy.sparse.vstack([X, X_test])
     assert combined.shape[0] == 119651
-    reduced, _, _ = run_svd(combined)
+    reduced, _ = run_svd(combined)
 
     X = reduced[:70988]
     X_test = reduced[70988:]
@@ -163,7 +190,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     test_predictions = []
     y_cols = Y.shape[1]
 
-    for i in tqdm(range(y_cols)):
+    for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
         model = lightgbm.LGBMRegressor(**lightgbm_params)
         model.fit(X, Y[:, i].copy())
         test_predictions.append(model.predict(X_test))
@@ -191,7 +218,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
 if __name__ == "__main__":
     lightgbm_params = {
         "learning_rate": 0.1,
-        "max_depth": 10,
+        "max_depth": 2,
         "num_leaves": 200,
         "min_child_samples": 250,
         "colsample_bytree": 0.8,
@@ -199,7 +226,7 @@ if __name__ == "__main__":
         "seed": 1,
         "device": "gpu",
         "verbosity": -1,
-        "n_estimators": 300,
+        "n_estimators": 100,
     }
     # create_submission(lightgbm_params)
     cross_validation(lightgbm_params)

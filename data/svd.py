@@ -118,4 +118,4 @@ def run_svd(
             json.dump(configuration, f, indent=4)
         logger.info(f"SVD completed and stored in {str(results_path)}")
 
-    return reduced, svd, run_id
+    return reduced, run_id
