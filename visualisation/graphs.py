@@ -8,16 +8,20 @@ def compare_hist(y_true: np.ndarray, y_pred: np.ndarray, columns: t.List[str]):
     gt_df = pd.DataFrame(y_true, columns=columns)
     pred_df = pd.DataFrame(y_pred, columns=columns)
 
-    # TODO: Use bars instead and precompute the histograms to avoid logging underlying histogram data in mlflow
     fig = go.Figure()
-    fig.add_trace(go.Histogram(x=gt_df[columns[0]], opacity=0.5, name=f"{columns[0]}_true", nbinsx=40))
-    fig.add_trace(go.Histogram(x=pred_df[columns[0]], opacity=0.5, name=f"{columns[0]}_pred", nbinsx=40))
+    fig.add_trace(go.Bar(x=gt_df[columns[0]], opacity=0.5, name=f"{columns[0]}_true"))
+    fig.add_trace(go.Bar(x=pred_df[columns[0]], opacity=0.5, name=f"{columns[0]}_pred"))
 
     buttons = []
     for column in columns:
+        v_min = min(gt_df[column].min(), pred_df[column].min())
+        v_max = max(gt_df[column].max(), pred_df[column].max())
+        gt_data, gt_bins = np.histogram(gt_df[column], range=(v_min, v_max), bins=50)
+        pred_data, pred_bins = np.histogram(pred_df[column], range=(v_min, v_max), bins=50)
         buttons.append(dict(
             args=[{
-                "x": [gt_df[column], pred_df[column]],
+                "x": [gt_bins, pred_bins],
+                "y": [gt_data, pred_data],
                 "name": [f"{column}_true", f"{column}_pred"],
             },
                 {
