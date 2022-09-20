@@ -1,4 +1,3 @@
-from copy import deepcopy
 import json
 import scipy
 import mlflow
@@ -10,6 +9,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from pathlib import Path
+from copy import deepcopy
 from scipy.sparse import csr_matrix
 from tempfile import TemporaryDirectory
 from pretty_html_table import build_table
@@ -17,6 +17,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
 
 from data.svd import run_svd, timer
+from visualisation.graphs import compare_hist
 
 
 logging.basicConfig(level=logging.INFO)
@@ -36,27 +37,21 @@ def correlation_score(y_true, y_pred):
 
 
 @timer
-def train_fold(
+def fit_predict(
     model: lightgbm.LGBMModel,
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
-    y_val: np.ndarray,
-) -> t.Tuple[float, float, float, float]:
+) -> np.ndarray:
     y_val_pred = []
     y_cols = y_train.shape[1]
-    for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
+    for i in tqdm(range(y_cols), ncols=100, desc="LightGBM Training"):
         model_col = deepcopy(model)
         model_col.fit(X_train, y_train[:, i].copy())
         y_val_pred.append(model_col.predict(X_val))
     y_val_pred = np.column_stack(y_val_pred)
 
-    col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
-    col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
-    mse = np.mean(col_mse)
-    corrscore = np.mean(col_corr)
-
-    return col_mse, mse, col_corr, corrscore
+    return y_val_pred
 
 
 @timer
@@ -118,7 +113,12 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
         y_train = Y[:, :y_cols][train_idx]
         X_val = X[val_idx]
         y_val = Y[:, :y_cols][val_idx]
-        col_mse, mse, col_corr, corrscore = train_fold(model, X_train, y_train, X_val, y_val)
+        y_val_pred = fit_predict(model, X_train, y_train, X_val)
+
+        col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
+        col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
+        mse = np.mean(col_mse)
+        corrscore = np.mean(col_corr)
 
         mses_column.append(col_mse)
         corrscores_column.append(col_corr)
@@ -126,6 +126,7 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
         corrscores.append(corrscore)
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
+    # Record scores for each column and display in descending order
     mse_df = pd.DataFrame(
         list(zip(y_col_names, np.mean(mses_column, axis=0))),
         columns=["column", "mse"],
@@ -146,6 +147,10 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
 
         mlflow.log_artifact(Path(temp_dir, "mse.html"))
         mlflow.log_artifact(Path(temp_dir, "corrscore.html"))
+
+    # Log distribution of predictions
+    fig = compare_hist(y_val, y_val_pred, y_col_names)
+    mlflow.log_figure(fig, "prediction_distributions.html")
 
     mlflow.log_params(lightgbm_params)
     mlflow.log_param("splits", n_splits)
@@ -195,7 +200,7 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     test_predictions = []
     y_cols = Y.shape[1]
 
-    for i in tqdm(range(y_cols), ncols=50, desc="LightGBM Training"):
+    for i in tqdm(range(y_cols), ncols=100, desc="LightGBM Training"):
         model = lightgbm.LGBMRegressor(**lightgbm_params)
         model.fit(X, Y[:, i].copy())
         test_predictions.append(model.predict(X_test))
