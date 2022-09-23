@@ -13,7 +13,7 @@ def compare_hist(y_true: np.ndarray, y_pred: np.ndarray, columns: t.List[str]):
     fig.add_trace(go.Bar(x=pred_df[columns[0]], opacity=0.5, name=f"{columns[0]}_pred"))
 
     buttons = []
-    for column in columns:
+    for column in sorted(columns):
         v_min = min(gt_df[column].min(), pred_df[column].min())
         v_max = max(gt_df[column].max(), pred_df[column].max())
         gt_data, gt_bins = np.histogram(gt_df[column], range=(v_min, v_max), bins=50)
