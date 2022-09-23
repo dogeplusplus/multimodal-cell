@@ -57,7 +57,7 @@ def fit_predict(
 ) -> np.ndarray:
     y_val_pred = []
     y_cols = y_train.shape[1]
-    for i in tqdm(range(y_cols), ncols=100, desc="LightGBM Training"):
+    for i in tqdm(range(y_cols), ncols=100, desc="Model Training"):
         model.fit(X_train, y_train[:, i].copy())
         y_val_pred.append(model.predict(X_val))
     y_val_pred = np.column_stack(y_val_pred)
@@ -255,6 +255,7 @@ if __name__ == "__main__":
         "max_depth": 6,
         "alpha": 0,
         "lambda": 1,
+        "tree_method": "gpu_hist",
     }
 
     # lightgbm_builder = ModelConstructor(
