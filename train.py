@@ -2,14 +2,17 @@ import json
 import scipy
 import mlflow
 import logging
-import lightgbm
+# import lightgbm
 import typing as t
 import numpy as np
 import pandas as pd
 
+
 from tqdm import tqdm
 from pathlib import Path
-from copy import deepcopy
+from typing import Callable
+from dataclasses import dataclass
+from xgboost import XGBRegressor
 from scipy.sparse import csr_matrix
 from tempfile import TemporaryDirectory
 from pretty_html_table import build_table
@@ -22,6 +25,15 @@ from visualisation.graphs import compare_hist
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ModelConstructor:
+    constructor: Callable
+    parameters: t.Dict[str, t.Any]
+
+    def instantiate(self):
+        return self.constructor(**self.parameters)
 
 
 def correlation_score(y_true, y_pred):
@@ -38,7 +50,7 @@ def correlation_score(y_true, y_pred):
 
 @timer
 def fit_predict(
-    model: lightgbm.LGBMModel,
+    model: t.Any,
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
@@ -46,16 +58,15 @@ def fit_predict(
     y_val_pred = []
     y_cols = y_train.shape[1]
     for i in tqdm(range(y_cols), ncols=100, desc="LightGBM Training"):
-        model_col = deepcopy(model)
-        model_col.fit(X_train, y_train[:, i].copy())
-        y_val_pred.append(model_col.predict(X_val))
+        model.fit(X_train, y_train[:, i].copy())
+        y_val_pred.append(model.predict(X_val))
     y_val_pred = np.column_stack(y_val_pred)
 
     return y_val_pred
 
 
 @timer
-def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
+def cross_validation(model_constructor: ModelConstructor):
     DATA_DIR = Path("open_problems_multimodal")
     FP_CELL_METADATA = DATA_DIR / "metadata.csv"
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
@@ -106,9 +117,10 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
     corrscores = []
     mses_column = []
     corrscores_column = []
-    model = lightgbm.LGBMRegressor(**lightgbm_params)
 
     for train_idx, val_idx in kf.split(X, groups=meta.donor):
+        model = model_constructor.instantiate()
+
         X_train = X[train_idx]
         y_train = Y[:, :y_cols][train_idx]
         X_val = X[val_idx]
@@ -152,7 +164,7 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
     fig = compare_hist(y_val, y_val_pred, y_col_names)
     mlflow.log_figure(fig, "prediction_distributions.html")
 
-    mlflow.log_params(lightgbm_params)
+    mlflow.log_params(model_constructor.parameters)
     mlflow.log_param("splits", n_splits)
     mlflow.log_param("run_id", run_id)
     mlflow.log_metric("mse", np.mean(mses))
@@ -160,7 +172,7 @@ def cross_validation(lightgbm_params: t.Dict[str, t.Any]):
 
 
 @timer
-def create_submission(lightgbm_params: t.Dict[str, t.Any]):
+def create_submission(model_constructor: ModelConstructor):
     DATA_DIR = Path("open_problems_multimodal")
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
@@ -200,8 +212,8 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     test_predictions = []
     y_cols = Y.shape[1]
 
-    for i in tqdm(range(y_cols), ncols=100, desc="LightGBM Training"):
-        model = lightgbm.LGBMRegressor(**lightgbm_params)
+    for i in tqdm(range(y_cols), ncols=100, desc="Model Training"):
+        model = model_constructor.instantiate()
         model.fit(X, Y[:, i].copy())
         test_predictions.append(model.predict(X_test))
 
@@ -214,7 +226,6 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
     )
     submission.iloc[:len(test_predictions.ravel())] = test_predictions.ravel()
     assert not submission.isna().any()
-
     mlflow.set_experiment("submissions")
 
     with TemporaryDirectory() as temp_dir:
@@ -222,21 +233,38 @@ def create_submission(lightgbm_params: t.Dict[str, t.Any]):
         submission.to_csv(temp_file)
         mlflow.log_artifact(temp_file)
 
-    mlflow.log_params(lightgbm_params)
+    mlflow.log_params(model_constructor.parameters)
 
 
 if __name__ == "__main__":
-    lightgbm_params = {
-        "learning_rate": 0.1,
-        "max_depth": 2,
-        "num_leaves": 200,
-        "min_child_samples": 250,
-        "colsample_bytree": 0.8,
-        "subsample": 0.6,
-        "seed": 1,
-        "device": "gpu",
-        "verbosity": -1,
-        "n_estimators": 100,
+    # lightgbm_params = {
+    #     "learning_rate": 0.1,
+    #     "max_depth": 2,
+    #     "num_leaves": 200,
+    #     "min_child_samples": 250,
+    #     "colsample_bytree": 0.8,
+    #     "subsample": 0.6,
+    #     "seed": 1,
+    #     "device": "gpu",
+    #     "verbosity": -1,
+    #     "n_estimators": 100,
+    # }
+    xgb_params = {
+        "eta": 0.3,
+        "min_child_weight": 1,
+        "max_depth": 6,
+        "alpha": 0,
+        "lambda": 1,
     }
+
+    # lightgbm_builder = ModelConstructor(
+    #     lightgbm.LGBMRegressor,
+    #     lightgbm_params,
+    # )
+    xgb_builder = ModelConstructor(
+        XGBRegressor,
+        xgb_params,
+
+    )
     # create_submission(lightgbm_params)
-    cross_validation(lightgbm_params)
+    cross_validation(xgb_builder)
