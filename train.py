@@ -48,6 +48,15 @@ def correlation_score(y_true, y_pred):
     return corrsum / len(y_true)
 
 
+def mlflow_run(func):
+    def wrapper(*args, **kwargs):
+        mlflow.start_run()
+        func(*args, **kwargs)
+        mlflow.end_run()
+
+    return wrapper
+
+
 @timer
 def fit_predict(
     model: t.Any,
@@ -65,6 +74,7 @@ def fit_predict(
     return y_val_pred
 
 
+@mlflow_run
 @timer
 def cross_validation(model_constructor: ModelConstructor):
     DATA_DIR = Path("open_problems_multimodal")
@@ -171,6 +181,7 @@ def cross_validation(model_constructor: ModelConstructor):
     mlflow.log_metric("corrscore", np.mean(corrscores))
 
 
+@mlflow_run
 @timer
 def create_submission(model_constructor: ModelConstructor):
     DATA_DIR = Path("open_problems_multimodal")
