@@ -2,7 +2,7 @@ import json
 import scipy
 import mlflow
 import logging
-# import lightgbm
+import lightgbm
 import typing as t
 import numpy as np
 import pandas as pd
@@ -126,7 +126,6 @@ def cross_validation(model_constructor: ModelConstructor):
     mses = []
     corrscores = []
     mses_column = []
-    corrscores_column = []
 
     for train_idx, val_idx in kf.split(X, groups=meta.donor):
         model = model_constructor.instantiate()
@@ -138,13 +137,10 @@ def cross_validation(model_constructor: ModelConstructor):
         y_val_pred = fit_predict(model, X_train, y_train, X_val)
 
         col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
-        col_corr = np.array([np.corrcoef(y_val[:, i], y_val_pred[:, i])[1, 0] for i in range(y_cols)])
-        mse = np.mean(col_mse)
-        corrscore = np.mean(col_corr)
-
         mses_column.append(col_mse)
-        corrscores_column.append(col_corr)
+        mse = np.mean(col_mse)
         mses.append(mse)
+        corrscore = correlation_score(y_val, y_val_pred)
         corrscores.append(corrscore)
         logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
@@ -153,22 +149,13 @@ def cross_validation(model_constructor: ModelConstructor):
         list(zip(y_col_names, np.mean(mses_column, axis=0))),
         columns=["column", "mse"],
     ).sort_values(by="mse", ascending=False)
-    corr_df = pd.DataFrame(
-        list(zip(y_col_names, np.mean(corrscores_column, axis=0))),
-        columns=["column", "corrscore"],
-    ).sort_values(by="corrscore", ascending=True)
 
     with TemporaryDirectory() as temp_dir:
         mse_table = build_table(mse_df, "blue_light")
         with open(Path(temp_dir, "mse.html"), "w") as f:
             f.write(mse_table)
 
-        corr_table = build_table(corr_df, "blue_light")
-        with open(Path(temp_dir, "corrscore.html"), "w") as f:
-            f.write(corr_table)
-
         mlflow.log_artifact(Path(temp_dir, "mse.html"))
-        mlflow.log_artifact(Path(temp_dir, "corrscore.html"))
 
     # Log distribution of predictions
     fig = compare_hist(y_val, y_val_pred, y_col_names)
@@ -248,18 +235,18 @@ def create_submission(model_constructor: ModelConstructor):
 
 
 if __name__ == "__main__":
-    # lightgbm_params = {
-    #     "learning_rate": 0.1,
-    #     "max_depth": 2,
-    #     "num_leaves": 200,
-    #     "min_child_samples": 250,
-    #     "colsample_bytree": 0.8,
-    #     "subsample": 0.6,
-    #     "seed": 1,
-    #     "device": "gpu",
-    #     "verbosity": -1,
-    #     "n_estimators": 100,
-    # }
+    lightgbm_params = {
+        "learning_rate": 0.1,
+        "max_depth": 15,
+        "num_leaves": 200,
+        "min_child_samples": 250,
+        "colsample_bytree": 0.8,
+        "subsample": 0.6,
+        "seed": 1,
+        "device": "gpu",
+        "verbosity": -1,
+        "n_estimators": 300,
+    }
     xgb_params = {
         "eta": 0.3,
         "min_child_weight": 1,
@@ -269,14 +256,14 @@ if __name__ == "__main__":
         "tree_method": "gpu_hist",
     }
 
-    # lightgbm_builder = ModelConstructor(
-    #     lightgbm.LGBMRegressor,
-    #     lightgbm_params,
-    # )
+    lightgbm_builder = ModelConstructor(
+        lightgbm.LGBMRegressor,
+        lightgbm_params,
+    )
     xgb_builder = ModelConstructor(
         XGBRegressor,
         xgb_params,
 
     )
     # create_submission(lightgbm_params)
-    cross_validation(xgb_builder)
+    cross_validation(lightgbm_builder)
