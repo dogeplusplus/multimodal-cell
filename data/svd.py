@@ -1,18 +1,16 @@
 import uuid
-import time
 import json
 import pickle
 import logging
 import hashlib
-import functools
 import typing as t
 import numpy as np
 
 from pathlib import Path
 from sklearn.decomposition import TruncatedSVD
 
+from utils.decorators import timer
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -35,19 +33,6 @@ def check_svd(svd_dir: Path, array: np.array, new_config: t.Dict[str, t.Any]) ->
 
     # No existing run matches this configuration
     return False
-
-
-def timer(func):
-    @functools.wraps(func)
-    def wrapper_timer(*args, **kwargs):
-        tic = time.perf_counter()
-        value = func(*args, **kwargs)
-        toc = time.perf_counter()
-        elapsed = toc - tic
-        logger.info(f"Function Elapsed time {func.__name__}: {elapsed:0.4f} seconds")
-        return value
-
-    return wrapper_timer
 
 
 @timer

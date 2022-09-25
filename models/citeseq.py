@@ -2,28 +2,26 @@ import json
 import scipy
 import mlflow
 import logging
-import lightgbm
 import typing as t
 import numpy as np
 import pandas as pd
-
 
 from tqdm import tqdm
 from pathlib import Path
 from typing import Callable
 from dataclasses import dataclass
-from xgboost import XGBRegressor
 from scipy.sparse import csr_matrix
 from tempfile import TemporaryDirectory
 from pretty_html_table import build_table
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
 
-from data.svd import run_svd, timer
+from data.svd import run_svd
+from utils.decorators import mlflow_run, timer
+from utils.metrics import correlation_score
 from visualisation.graphs import compare_hist
 
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -34,27 +32,6 @@ class ModelConstructor:
 
     def instantiate(self):
         return self.constructor(**self.parameters)
-
-
-def correlation_score(y_true, y_pred):
-    if type(y_true) == pd.DataFrame:
-        y_true = y_true.values
-    if type(y_pred) == pd.DataFrame:
-        y_pred = y_pred.values
-
-    corrsum = 0
-    for i in range(len(y_true)):
-        corrsum += np.corrcoef(y_true[i], y_pred[i])[1, 0]
-    return corrsum / len(y_true)
-
-
-def mlflow_run(func):
-    def wrapper(*args, **kwargs):
-        mlflow.start_run()
-        func(*args, **kwargs)
-        mlflow.end_run()
-
-    return wrapper
 
 
 @timer
@@ -74,7 +51,7 @@ def fit_predict(
     return y_val_pred
 
 
-@mlflow_run
+@mlflow_run("citeseq")
 @timer
 def cross_validation(model_constructor: ModelConstructor):
     DATA_DIR = Path("open_problems_multimodal")
@@ -168,9 +145,8 @@ def cross_validation(model_constructor: ModelConstructor):
     mlflow.log_metric("corrscore", np.mean(corrscores))
 
 
-@mlflow_run
 @timer
-def create_submission(model_constructor: ModelConstructor):
+def citeseq_submission(model_constructor: ModelConstructor, citeseq_path: Path):
     DATA_DIR = Path("open_problems_multimodal")
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
@@ -216,54 +192,4 @@ def create_submission(model_constructor: ModelConstructor):
         test_predictions.append(model.predict(X_test))
 
     test_predictions = np.column_stack(test_predictions)
-    # TODO: Replace with multiome pipeline later.
-    submission = pd.read_csv(
-        Path("open_problems_multimodal", "multiome-sparse-submission.csv"),
-        index_col="row_id",
-        squeeze=True,
-    )
-    submission.iloc[:len(test_predictions.ravel())] = test_predictions.ravel()
-    assert not submission.isna().any()
-    mlflow.set_experiment("submissions")
-
-    with TemporaryDirectory() as temp_dir:
-        temp_file = Path(temp_dir) / "submission.csv"
-        submission.to_csv(temp_file)
-        mlflow.log_artifact(temp_file)
-
-    mlflow.log_params(model_constructor.parameters)
-
-
-if __name__ == "__main__":
-    lightgbm_params = {
-        "learning_rate": 0.1,
-        "max_depth": 15,
-        "num_leaves": 200,
-        "min_child_samples": 250,
-        "colsample_bytree": 0.8,
-        "subsample": 0.6,
-        "seed": 1,
-        "device": "gpu",
-        "verbosity": -1,
-        "n_estimators": 300,
-    }
-    xgb_params = {
-        "eta": 0.3,
-        "min_child_weight": 1,
-        "max_depth": 6,
-        "alpha": 0,
-        "lambda": 1,
-        "tree_method": "gpu_hist",
-    }
-
-    lightgbm_builder = ModelConstructor(
-        lightgbm.LGBMRegressor,
-        lightgbm_params,
-    )
-    xgb_builder = ModelConstructor(
-        XGBRegressor,
-        xgb_params,
-
-    )
-    # create_submission(lightgbm_params)
-    cross_validation(lightgbm_builder)
+    np.save(citeseq_path, test_predictions)
