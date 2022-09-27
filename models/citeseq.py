@@ -8,6 +8,7 @@ import pandas as pd
 
 from tqdm import tqdm
 from pathlib import Path
+from copy import deepcopy
 from typing import Callable
 from dataclasses import dataclass
 from scipy.sparse import csr_matrix
@@ -16,6 +17,7 @@ from pretty_html_table import build_table
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
 
+from joblib import dump
 from data.svd import run_svd
 from utils.decorators import mlflow_run, timer
 from utils.metrics import correlation_score
@@ -40,15 +42,18 @@ def fit_predict(
     X_train: np.ndarray,
     y_train: np.ndarray,
     X_val: np.ndarray,
-) -> np.ndarray:
+) -> t.Tuple[np.ndarray, t.Any]:
+    models = []
     y_val_pred = []
     y_cols = y_train.shape[1]
     for i in tqdm(range(y_cols), ncols=100, desc="Model Training"):
-        model.fit(X_train, y_train[:, i].copy())
+        model_col = deepcopy(model)
+        model_col.fit(X_train, y_train[:, i].copy())
         y_val_pred.append(model.predict(X_val))
+        models.append(model_col)
     y_val_pred = np.column_stack(y_val_pred)
 
-    return y_val_pred
+    return y_val_pred, models
 
 
 @mlflow_run("citeseq")
@@ -111,7 +116,7 @@ def cross_validation(model_constructor: ModelConstructor):
         y_train = Y[:, :y_cols][train_idx]
         X_val = X[val_idx]
         y_val = Y[:, :y_cols][val_idx]
-        y_val_pred = fit_predict(model, X_train, y_train, X_val)
+        y_val_pred, models = fit_predict(model, X_train, y_train, X_val)
 
         col_mse = np.array([mean_squared_error(y_val[:, i], y_val_pred[:, i]) for i in range(y_cols)])
         mses_column.append(col_mse)
@@ -131,8 +136,11 @@ def cross_validation(model_constructor: ModelConstructor):
         mse_table = build_table(mse_df, "blue_light")
         with open(Path(temp_dir, "mse.html"), "w") as f:
             f.write(mse_table)
-
         mlflow.log_artifact(Path(temp_dir, "mse.html"))
+
+        # Save models from last cross-validation run
+        dump(models, temp_dir / "models.joblib")
+        mlflow.log_artifact(temp_dir / "models.joblib")
 
     # Log distribution of predictions
     fig = compare_hist(y_val, y_val_pred, y_col_names)
