@@ -4,10 +4,11 @@ import mlflow
 import numpy as np
 import pandas as pd
 
+from tqdm import trange
 from pathlib import Path
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.decomposition import PCA, IncrementalPCA
-from sklearn.linear_model import Ridge, SGDRegressor
+from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
 
@@ -51,36 +52,37 @@ def cross_validation(model_constructor: ModelConstructor):
 
     chunksize = 5000
     pca = IncrementalPCA(n_components=4)
-    # TODO: Figure out why this line doesnt work
-    reader = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, iterator=True, chunksize=chunksize)
+    TOTAL_SIZE = 105942
+    chunks = int(np.ceil(TOTAL_SIZE / chunksize))
     columns_to_use = slice(10000, 14000)
 
     # Fit PCA by chunks of the data
     all_zero_columns = None
-    for chunk in reader:
-        X = chunk.values
+    for idx in trange(0, chunks, desc="Fitting incremental PCA"):
+        df = pd.read_hdf(
+            FP_MULTIOME_TRAIN_INPUTS,
+            start=idx*chunksize,
+            stop=min((idx+1) * chunksize, TOTAL_SIZE)
+        )
+        X = df.values
         if all_zero_columns is None:
             all_zero_columns = (X == 0).all(axis=0)
         X = X[:, ~all_zero_columns]
-        X = X[: columns_to_use]
+        X = X[:, columns_to_use]
         pca.partial_fit(X)
 
     kf = KFold(n_splits=5, shuffle=True, random_state=1)
-
-    # Split chunks of the data frame into train and validation
-    TOTAL_SIZE = 105942
-    num_chunks = TOTAL_SIZE // chunksize
-    start_points = [idx * chunksize for idx in range(num_chunks)]
+    start_points = [idx * chunksize for idx in range(chunks)]
 
     fold_mses = []
     fold_correlations = []
 
     for fold, (train_starts, val_starts) in enumerate(kf.split(start_points)):
-        model = SGDRegressor()
+        model = model_constructor.instantiate()
 
         # Train SGD regressor using data chunks as minibatch
         for start in train_starts:
-            train_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, chunksize=chunksize)
+            train_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, stop=start+chunksize)
             train_batch = train_batch.values
             X_train = pca.transform(train_batch)
             y_train = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS, start=start, chunksize=chunksize)
@@ -117,6 +119,7 @@ def cross_validation(model_constructor: ModelConstructor):
 @timer
 def multiome_submission(multiome_path: Path):
     # TODO: tidy up the hard coding, try to abstract away some of the model bits
+    # TODO: Incorporate bits from the cross validation
     FP_MULTIOME_TRAIN_INPUTS = Path("open_problems_multimodal", "train_multi_inputs.h5")
     FP_MULTIOME_TEST_INPUTS = Path("open_problems_multimodal", "test_multi_inputs.h5")
     FP_MULTIOME_TRAIN_TARGETS = Path("open_problems_multimodal", "train_multi_targets.h5")
