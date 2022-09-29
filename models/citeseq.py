@@ -49,7 +49,7 @@ def fit_predict(
     for i in tqdm(range(y_cols), ncols=100, desc="Model Training"):
         model_col = deepcopy(model)
         model_col.fit(X_train, y_train[:, i].copy())
-        y_val_pred.append(model.predict(X_val))
+        y_val_pred.append(model_col.predict(X_val))
         models.append(model_col)
     y_val_pred = np.column_stack(y_val_pred)
 
