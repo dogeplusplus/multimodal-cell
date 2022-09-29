@@ -139,8 +139,8 @@ def cross_validation(model_constructor: ModelConstructor):
         mlflow.log_artifact(Path(temp_dir, "mse.html"))
 
         # Save models from last cross-validation run
-        dump(models, temp_dir / "models.joblib")
-        mlflow.log_artifact(temp_dir / "models.joblib")
+        dump(models, Path(temp_dir, "models.joblib"))
+        mlflow.log_artifact(Path(temp_dir, "models.joblib"))
 
     # Log distribution of predictions
     fig = compare_hist(y_val, y_val_pred, y_col_names)
