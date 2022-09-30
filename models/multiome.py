@@ -1,16 +1,17 @@
-import logging
 import pickle
 import mlflow
+import logging
 import numpy as np
 import pandas as pd
 
-from tqdm import trange
+from tqdm import tqdm
 from pathlib import Path
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.decomposition import PCA, IncrementalPCA
 from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
+from sklearn.metrics import mean_squared_error
+from sklearn.decomposition import PCA, TruncatedSVD
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.base import BaseEstimator, TransformerMixin
 
 from utils.decorators import mlflow_run, timer
 from utils.metrics import correlation_score
@@ -51,25 +52,41 @@ def cross_validation(model_constructor: ModelConstructor):
     FP_MULTIOME_TRAIN_TARGETS = Path("open_problems_multimodal", "train_multi_targets.h5")
 
     chunksize = 5000
-    pca = IncrementalPCA(n_components=4)
     TOTAL_SIZE = 105942
     chunks = int(np.ceil(TOTAL_SIZE / chunksize))
     columns_to_use = slice(10000, 14000)
 
-    # Fit PCA by chunks of the data
     all_zero_columns = None
-    for idx in trange(0, chunks, desc="Fitting incremental PCA"):
-        df = pd.read_hdf(
-            FP_MULTIOME_TRAIN_INPUTS,
-            start=idx*chunksize,
-            stop=min((idx+1) * chunksize, TOTAL_SIZE)
-        )
-        X = df.values
-        if all_zero_columns is None:
-            all_zero_columns = (X == 0).all(axis=0)
-        X = X[:, ~all_zero_columns]
-        X = X[:, columns_to_use]
-        pca.partial_fit(X)
+
+    # # Fit PCA by chunks of the data
+    # pca = IncrementalPCA(n_components=4)
+    # for idx in trange(0, chunks, desc="Fitting incremental PCA"):
+    #     df = pd.read_hdf(
+    #         FP_MULTIOME_TRAIN_INPUTS,
+    #         start=idx*chunksize,
+    #         stop=min((idx+1) * chunksize, TOTAL_SIZE)
+    #     )
+    #     X = df.values
+    #     if all_zero_columns is None:
+    #         all_zero_columns = (X == 0).all(axis=0)
+    #     X = X[:, ~all_zero_columns]
+    #     X = X[:, columns_to_use]
+    #     pca.partial_fit(X)
+
+    # TODO: Decide on suitable dimensionality reduction scheme for multiome
+    # Truncated SVD
+    df = pd.read_hdf(
+        FP_MULTIOME_TRAIN_INPUTS,
+        start=0,
+        stop=chunksize,
+    )
+    X = df.values
+    if all_zero_columns is None:
+        all_zero_columns = (X == 0).all(axis=0)
+    X = X[:, ~all_zero_columns]
+    X = X[:, columns_to_use]
+    svd = TruncatedSVD(n_components=128)
+    svd.fit(X)
 
     kf = KFold(n_splits=5, shuffle=True, random_state=1)
     start_points = [idx * chunksize for idx in range(chunks)]
@@ -79,24 +96,33 @@ def cross_validation(model_constructor: ModelConstructor):
 
     for fold, (train_starts, val_starts) in enumerate(kf.split(start_points)):
         model = model_constructor.instantiate()
+        model = MultiOutputRegressor(model, n_jobs=-1)
 
         # Train SGD regressor using data chunks as minibatch
-        for start in train_starts:
+        for start in tqdm(train_starts, desc=f"Training Fold {fold}"):
             train_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, stop=start+chunksize)
             train_batch = train_batch.values
-            X_train = pca.transform(train_batch)
-            y_train = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS, start=start, chunksize=chunksize)
+            train_batch = train_batch[:, ~all_zero_columns]
+            train_batch = train_batch[:, columns_to_use]
+
+            X_train = svd.transform(train_batch)
+            y_train = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS, start=start, stop=start+chunksize)
             y_train = y_train.values
             model.partial_fit(X_train, y_train)
 
         # For a given fold, build up the MSEs for each chunk in validation
         mses = []
         correlations = []
-        for start in val_starts:
-            val_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, chunksize=chunksize)
+
+        val_bar = tqdm(val_starts, desc=f"Validation Fold {fold}:")
+        for start in val_bar:
+            val_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, stop=start+chunksize)
             val_batch = train_batch.values
-            X_val = pca.transform(val_batch)
-            y_val = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS, start=start, chunksize=chunksize)
+            val_batch = val_batch[:, ~all_zero_columns]
+            val_batch = val_batch[:, columns_to_use]
+
+            X_val = svd.transform(val_batch)
+            y_val = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS, start=start, stop=start+chunksize)
             y_val = y_val.values
             y_val_pred = model.predict(X_val)
 
@@ -105,9 +131,10 @@ def cross_validation(model_constructor: ModelConstructor):
             corrscore = correlation_score(y_val, y_val_pred)
             correlations.append(corrscore)
 
-        logger.info(f"Fold: {fold}, MSE: {mse}, Correlation Score {corrscore}")
+            val_bar.set_postfix({"mse": np.mean(mses), "corrscore": np.mean(correlations)})
+
         fold_mses.append(np.mean(mses))
-        fold_correlations.append(np.mean(corrscore))
+        fold_correlations.append(np.mean(correlations))
 
     logger.info(f"Mean MSE: {np.mean(fold_mses)}")
     logger.info(f"Mean Correlation: {np.mean(fold_correlations)}")
