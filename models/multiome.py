@@ -117,7 +117,7 @@ def cross_validation(model_constructor: ModelConstructor):
         val_bar = tqdm(val_starts, desc=f"Validation Fold {fold}:")
         for start in val_bar:
             val_batch = pd.read_hdf(FP_MULTIOME_TRAIN_INPUTS, start=start, stop=start+chunksize)
-            val_batch = train_batch.values
+            val_batch = val_batch.values
             val_batch = val_batch[:, ~all_zero_columns]
             val_batch = val_batch[:, columns_to_use]
 
