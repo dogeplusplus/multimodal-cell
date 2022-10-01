@@ -59,7 +59,7 @@ def fit_predict(
 @mlflow_run("citeseq")
 @timer
 def cross_validation(model_constructor: ModelConstructor):
-    DATA_DIR = Path("open_problems_multimodal")
+    DATA_DIR = Path("multimodal")
     FP_CELL_METADATA = DATA_DIR / "metadata.csv"
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
@@ -155,7 +155,7 @@ def cross_validation(model_constructor: ModelConstructor):
 
 @timer
 def citeseq_submission(model_constructor: ModelConstructor, citeseq_path: Path):
-    DATA_DIR = Path("open_problems_multimodal")
+    DATA_DIR = Path("multimodal")
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
     FP_CITE_TEST_INPUTS = DATA_DIR / "test_cite_inputs.h5"
