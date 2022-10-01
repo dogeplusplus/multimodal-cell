@@ -4,14 +4,14 @@ import pandas as pd
 
 from pathlib import Path
 
-from data.pointer_array import create_indptr
+from data.create_indptr import create_indptr
 
 
 logger = logging.getLogger(__name__)
 
 
 def check_size(xs: np.ndarray, ys: np.ndarray, datas: np.ndarray) -> float:
-    return (xs.nbytes, ys.nbytes, datas.nbytes) * 1e-9
+    return (xs.nbytes + ys.nbytes + datas.nbytes) * 1e-9
 
 
 def create_csr_arrays(h5_file_path: Path):
