@@ -100,11 +100,9 @@ def create_sparse_matrix(
     indptr_paths: t.List[Path],
     indice_paths: t.List[Path],
     data_paths: t.List[Path],
+    rows: int,
+    columns: int,
 ) -> csr_matrix:
-    # Known shapes of the multiome inputs apriori
-    N_ROWS = 105942
-    N_COLS = 228942
-
     csr_arrays = []
     for ptr, ind, dat in zip(indptr_paths, indice_paths, data_paths):
         indptr = np.load(ptr)
@@ -114,7 +112,7 @@ def create_sparse_matrix(
         # Indptr has shape nrows instead of nrows + 1, can add last elemenent
         # corresponding to the length of indices or data arrays
         indptr = np.append(indptr, indptr[-1] + indices[indptr[-1]:].shape)
-        csr = csr_matrix((data, indices, indptr), shape=(N_ROWS, N_COLS))
+        csr = csr_matrix((data, indices, indptr), shape=(rows, columns))
         csr_arrays.append(csr)
 
     return hstack(csr_arrays)
@@ -128,13 +126,22 @@ def main():
     TRAIN_OUTPUT_PATH = DATA_DIR / "train_multiome_input_sparse.npz"
     TEST_OUTPUT_PATH = DATA_DIR / "test_multiome_input_sparse.npz"
 
-    for source, destination in [
-        (TRAIN_MULTI_INPUTS, TRAIN_OUTPUT_PATH),
-        (TEST_MULTI_INPUTS, TEST_OUTPUT_PATH),
-    ]:
+    # Known shapes of the multiome inputs apriori
+    TRAIN_ROWS = 105942
+    TRAIN_COLS = 228942
+
+    TEST_ROWS = 55935
+    TEST_COLS = 228942
+
+    inputs = [
+        (TRAIN_MULTI_INPUTS, TRAIN_OUTPUT_PATH, TRAIN_ROWS, TRAIN_COLS),
+        (TEST_MULTI_INPUTS, TEST_OUTPUT_PATH, TEST_ROWS, TEST_COLS),
+    ]
+
+    for source, destination, rows, cols in inputs:
         with TemporaryDirectory() as temp_dir:
             indptr_paths, indice_paths, data_paths = create_csr_arrays(source, Path(temp_dir))
-            stacked_csr = create_sparse_matrix(indptr_paths, indice_paths, data_paths)
+            stacked_csr = create_sparse_matrix(indptr_paths, indice_paths, data_paths, rows, cols)
         save_npz(destination, stacked_csr)
 
 
