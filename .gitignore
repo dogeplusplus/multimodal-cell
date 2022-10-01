@@ -1,5 +1,6 @@
-open_problems_multimodal/*
+multimodal/*
 precomputed_svd/*
 submissions/*
+notebooks/*
 *.npy
 *.pkl
