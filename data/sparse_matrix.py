@@ -67,6 +67,6 @@ def create_csr_arrays(h5_file_path: Path):
         data_s = np.hstack((data_s, tmp_data))
 
     logger.info("Done. Save last files")
-    np.save(f"{prefix_filename}_indptr_{file_pointer.npy}", indptr)
-    np.save(f"{prefix_filename}_indices_{file_pointer.npy}", indices)
-    np.save(f"{prefix_filename}_data_{file_pointer.npy}", data_s)
+    np.save(f"{prefix_filename}_indptr_{file_pointer}.npy", indptr)
+    np.save(f"{prefix_filename}_indices_{file_pointer}.npy", indices)
+    np.save(f"{prefix_filename}_data_{file_pointer}.npy", data_s)
