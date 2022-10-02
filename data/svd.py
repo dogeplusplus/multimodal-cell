@@ -93,7 +93,7 @@ def run_svd(
         config_path = results_path / "config.json"
 
         reduced = svd.fit_transform(array)
-        logger.info(f"Shape after SVD: {array.shape}")
+        logger.info(f"Shape after SVD: {reduced.shape}")
 
         np.save(array_path, reduced)
         with open(algorithm_path, "wb") as f:
