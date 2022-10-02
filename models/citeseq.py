@@ -63,7 +63,6 @@ def cross_validation(model_constructor: ModelConstructor):
     FP_CELL_METADATA = DATA_DIR / "metadata.csv"
     FP_CITE_TRAIN_INPUTS = DATA_DIR / "train_cite_inputs.h5"
     FP_CITE_TRAIN_TARGETS = DATA_DIR / "train_cite_targets.h5"
-    FP_CITE_TEST_INPUTS = DATA_DIR / "test_cite_inputs.h5"
     COLUMNS_PATH = DATA_DIR / "multimodal_columns.json"
 
     with open(COLUMNS_PATH) as f:
@@ -83,18 +82,9 @@ def cross_validation(model_constructor: ModelConstructor):
 
     # SVD performed on the combined train and test set
     X = csr_matrix(X.values)
-    X_test = pd.read_hdf(FP_CITE_TEST_INPUTS).drop(columns=constant_cols)
-    X_test = csr_matrix(X_test.values)
-
     logger.info(f"Original X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
-    logger.info(f"Original X_test shape: {X_test.shape} {X_test.size * (4 / 1024 ** 3):2.3f} GByte")
 
-    combined = scipy.sparse.vstack([X, X_test])
-    assert combined.shape[0] == 119651
-    reduced, run_id = run_svd(combined)
-
-    X = reduced[:70988]
-    X_test = reduced[70988:]
+    X, run_id = run_svd(X)
     X = np.hstack([X, X0])
 
     logger.info(f"Reduced X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
