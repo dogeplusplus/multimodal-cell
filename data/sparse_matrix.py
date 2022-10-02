@@ -122,20 +122,22 @@ def main():
     DATA_DIR = Path("multimodal")
     TRAIN_MULTI_INPUTS = DATA_DIR / "train_multi_inputs.h5"
     TEST_MULTI_INPUTS = DATA_DIR / "test_multi_inputs.h5"
+    TRAIN_MULTI_TARGETS = DATA_DIR / "train_multi_targets.h5"
 
     TRAIN_OUTPUT_PATH = DATA_DIR / "train_multiome_input_sparse.npz"
     TEST_OUTPUT_PATH = DATA_DIR / "test_multiome_input_sparse.npz"
+    TRAIN_TARGET_PATH = DATA_DIR / "train_multiome_target_sparse.npz"
 
     # Known shapes of the multiome inputs apriori
     TRAIN_ROWS = 105942
-    TRAIN_COLS = 228942
-
     TEST_ROWS = 55935
-    TEST_COLS = 228942
+    INPUT_COLUMNS = 228942
+    TARGET_COLUMNS = 23418
 
     inputs = [
-        (TRAIN_MULTI_INPUTS, TRAIN_OUTPUT_PATH, TRAIN_ROWS, TRAIN_COLS),
-        (TEST_MULTI_INPUTS, TEST_OUTPUT_PATH, TEST_ROWS, TEST_COLS),
+        (TRAIN_MULTI_INPUTS, TRAIN_OUTPUT_PATH, TRAIN_ROWS, INPUT_COLUMNS),
+        (TEST_MULTI_INPUTS, TEST_OUTPUT_PATH, TEST_ROWS, INPUT_COLUMNS),
+        (TRAIN_MULTI_TARGETS, TRAIN_TARGET_PATH, TRAIN_ROWS, TARGET_COLUMNS),
     ]
 
     for source, destination, rows, cols in inputs:
