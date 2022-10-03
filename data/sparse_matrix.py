@@ -25,7 +25,7 @@ def create_csr_arrays(h5_file_path: Path, destination: Path) -> t.Tuple[t.List[P
     # Initialize CSR arrays
     indptr = np.array([], dtype=np.int64)
     indices = np.array([], dtype=np.int32)
-    data_s = np.array([], dtype=np.float16)
+    data_s = np.array([], dtype=np.float32)
 
     indptr_paths = []
     indice_paths = []
@@ -51,7 +51,7 @@ def create_csr_arrays(h5_file_path: Path, destination: Path) -> t.Tuple[t.List[P
             # Re-initialize
             indptr = np.array([], dtype=np.int64)
             indices = np.array([], dtype=np.int32)
-            data_s = np.array([], dtype=np.float16)
+            data_s = np.array([], dtype=np.float32)
             file_pointer += 1
 
         pbar.set_postfix_str("Reading .h5 chunk")
@@ -64,7 +64,7 @@ def create_csr_arrays(h5_file_path: Path, destination: Path) -> t.Tuple[t.List[P
 
         # Convert types
         y_coords = y_coords.astype(np.int32, copy=False)
-        tmp_data = tmp_data.astype(np.float16, copy=False)
+        tmp_data = tmp_data.astype(np.float32, copy=False)
 
         pbar.set_postfix_str("Compressing row values")
         x_coords = create_indptr(x_coords, start_pos=start_pos, nrows=loaded_rows)
