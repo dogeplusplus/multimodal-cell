@@ -46,7 +46,7 @@ def run_svd(
     power_iteration_normalizer: str = "auto",
     tol: float = 0.0,
     folder: Path = Path("precomputed_svd"),
-) -> t.Tuple[np.array, TruncatedSVD]:
+) -> t.Tuple[np.array, str, TruncatedSVD]:
     # Store MD5 of array before SVD to avoid repeating work
     configuration = dict(
         md5=hashlib.md5(str(array).encode("utf-8")).hexdigest(),
@@ -103,4 +103,4 @@ def run_svd(
             json.dump(configuration, f, indent=4)
         logger.info(f"SVD completed and stored in {str(results_path)}")
 
-    return reduced, run_id
+    return reduced, run_id, svd

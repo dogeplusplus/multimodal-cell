@@ -84,7 +84,7 @@ def cross_validation(model_constructor: ModelConstructor):
     X = csr_matrix(X.values)
     logger.info(f"Original X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
 
-    X, run_id = run_svd(X)
+    X, run_id, _ = run_svd(X)
     X = np.hstack([X, X0])
 
     logger.info(f"Reduced X shape: {X.shape} {X.size * 4 / (1024 ** 3):2.3f} GByte")
@@ -168,7 +168,7 @@ def citeseq_submission(model_constructor: ModelConstructor, citeseq_path: Path):
 
     combined = scipy.sparse.vstack([X, X_test])
     assert combined.shape[0] == 119651
-    reduced, _ = run_svd(combined)
+    reduced, _, _ = run_svd(combined)
 
     X = reduced[:70988]
     X_test = reduced[70988:]
