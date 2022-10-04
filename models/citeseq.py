@@ -114,7 +114,7 @@ def cross_validation(model_constructor: ModelConstructor):
         mses.append(mse)
         corrscore = correlation_score(y_val, y_val_pred)
         corrscores.append(corrscore)
-        logger.info(f"shape = {X.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
+        logger.info(f"shape = {X_train.shape[1]:4}: mse = {mse:.5f}, corr = {corrscore:.5f}")
 
     # Record scores for each column and display in descending order
     mse_df = pd.DataFrame(

@@ -12,7 +12,6 @@ from tempfile import TemporaryDirectory
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
 from sklearn.decomposition import PCA
-from sklearn.multioutput import MultiOutputRegressor
 from sklearn.base import BaseEstimator, TransformerMixin
 
 from data.svd import run_svd
@@ -61,6 +60,7 @@ def cross_validation(model_constructor: ModelConstructor, seed: int = 1):
 
     # Run SVD on entire train/validation sets to ensure same features are used
     X, run_id, _ = run_svd(X, n_components=128)
+    X = X.astype(np.float16, copy=False)
     y_reduced, target_run_id, target_svd = run_svd(y, n_components=128)
     kf = KFold(n_splits=5, shuffle=True, random_state=seed)
 
@@ -73,15 +73,15 @@ def cross_validation(model_constructor: ModelConstructor, seed: int = 1):
     for (train_index, val_index) in kf.split(X, y):
         X_train = X[train_index]
         X_val = X[val_index]
-        y_train = y[train_index].toarray()
-        y_val = y[val_index].toarray()
+        y_train = y[train_index].toarray().astype(np.float16, copy=False)
+        y_val = y[val_index].toarray().astype(np.float16, copy=False)
 
         # Fitting is done on SVD reduced training data
         y_train_reduced = y_reduced[train_index]
 
         model = model_constructor.instantiate()
-        model = MultiOutputRegressor(model)
         model.fit(X_train, y_train_reduced)
+        pbar.set_postfix_str("Cross validation models fitted.")
 
         y_train_pred = model.predict(X_train) @ target_svd.components_
         train_mse = mean_squared_error(y_train, y_train_pred)
