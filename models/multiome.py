@@ -1,3 +1,4 @@
+import gc
 import pickle
 import mlflow
 import logging
@@ -72,9 +73,7 @@ def cross_validation(model_constructor: ModelConstructor, seed: int = 1):
     pbar = tqdm(desc="Cross Validation")
     for (train_index, val_index) in kf.split(X, y):
         X_train = X[train_index]
-        X_val = X[val_index]
         y_train = y[train_index].toarray().astype(np.float16, copy=False)
-        y_val = y[val_index].toarray().astype(np.float16, copy=False)
 
         # Fitting is done on SVD reduced training data
         y_train_reduced = y_reduced[train_index]
@@ -83,17 +82,35 @@ def cross_validation(model_constructor: ModelConstructor, seed: int = 1):
         model.fit(X_train, y_train_reduced)
         pbar.set_postfix_str("Cross validation models fitted.")
 
-        y_train_pred = model.predict(X_train) @ target_svd.components_
+        y_train_pred_reduced = model.predict(X_train)
+        del X_train, y_train_reduced
+        gc.collect()
+
+        y_train_pred = y_train_pred_reduced @ target_svd.components_
+        del y_train_pred_reduced
+        gc.collect()
         train_mse = mean_squared_error(y_train, y_train_pred)
         train_mses.append(train_mse)
         train_corr = correlation_score(y_train, y_train_pred)
         train_correlations.append(train_corr)
+        del y_train, y_train_pred
+        gc.collect()
 
-        y_val_pred = model.predict(X_val) @ target_svd.components_
+        X_val = X[val_index]
+        y_val = y[val_index].toarray().astype(np.float16, copy=False)
+        y_val_pred_reduced = model.predict(X_val)
+        del X_val
+        gc.collect()
+
+        y_val_pred = y_val_pred_reduced @ target_svd.components_
+        del y_val_pred_reduced
+        gc.collect()
         val_mse = mean_squared_error(y_val, y_val_pred)
         val_mses.append(val_mse)
         val_corr = correlation_score(y_val, y_val_pred)
         val_correlations.append(val_corr)
+        del y_val, y_val_pred
+        gc.collect()
 
         metrics = {
             "train_mse": np.mean(train_mses),
