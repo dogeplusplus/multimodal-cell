@@ -1,5 +1,5 @@
 import gc
-import pickle
+# import pickle
 import mlflow
 import logging
 import numpy as np
@@ -149,51 +149,55 @@ def multiome_submission(model_constructor: ModelConstructor, multiome_path: Path
     df_target = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS_RAW, start=0, stop=1)
     y_columns = df_target.columns
 
-    multi_train_x = load_npz(FP_MULTIOME_TRAIN_INPUTS)
-    multi_train_y = load_npz(FP_MULTIOME_TRAIN_TARGETS)
-    multi_test_x = load_npz(FP_MULTIOME_TEST_INPUTS)
+    X_train = load_npz(FP_MULTIOME_TRAIN_INPUTS)
+    y_train = load_npz(FP_MULTIOME_TRAIN_TARGETS)
+    X_test = load_npz(FP_MULTIOME_TEST_INPUTS)
 
-    multi_train_x, _, _ = run_svd(multi_train_x)
+    X_train, _, _ = run_svd(X_train)
     model = model_constructor.instantiate()
-    model.fit(multi_train_x, multi_train_y)
+    y_train, _, target_svd = run_svd(y_train, n_components=128)
+    model.fit(X_train, y_train)
 
+    del X_train, y_train
+    gc.collect()
+
+    test_predictions = model.predict(X_test)
+    del X_test
+    gc.collect()
+    test_predictions = test_predictions @ target_svd.components_
+
+    # TODO: figure out how to add the submissions
     eval_ids = pd.read_csv(FP_EVALUATION_IDS, index_col="row_id")
     eval_ids.cell_id = eval_ids.cell_id.astype(pd.CategoricalDtype())
     eval_ids.gene_id = eval_ids.gene_id.astype(pd.CategoricalDtype())
 
-    cell_id_set = set(eval_ids.cell_id)
+    # cell_id_set = set(eval_ids.cell_id)
     y_columns = pd.CategoricalIndex(y_columns, dtype=eval_ids.gene_id.dtype, name="gene_id")
-    submission = pd.Series(name="target", index=pd.MultiIndex.from_frame(eval_ids), dtype=np.float32)
+    # submission = pd.Series(name="target", index=pd.MultiIndex.from_frame(eval_ids), dtype=np.float32)
 
-    start = 0
-    chunksize = 5000
-    total_rows = 0
+    # while True:
+    #     rows_read = len(multi_test_x)
+    #     needed_row_mask = multi_test_x.index.isin(cell_id_set)
+    #     multi_test_x = multi_test_x.loc[needed_row_mask]
+    #     multi_test_index = multi_test_x.index
+    #     test_pred = model.predict(multi_test_x)
 
-    multi_train_y, _, _ = run_svd(multi_train_y, num_components=128)
+    #     test_pred = pd.DataFrame(
+    #         test_pred,
+    #         index=pd.CategoricalIndex(multi_test_index, dtype=eval_ids.cell_id.dtype, name="cell_id"),
+    #         columns=y_columns,
+    #     )
 
-    while True:
-        rows_read = len(multi_test_x)
-        needed_row_mask = multi_test_x.index.isin(cell_id_set)
-        multi_test_x = multi_test_x.loc[needed_row_mask]
-        multi_test_index = multi_test_x.index
-        test_pred = model.predict(multi_test_x)
+    #     for (index, row) in test_pred.iterrows():
+    #         row = row.reindex(eval_ids.gene_id[eval_ids.cell_id == index])
+    #         submission.loc[index] = row.values
 
-        test_pred = pd.DataFrame(
-            test_pred,
-            index=pd.CategoricalIndex(multi_test_index, dtype=eval_ids.cell_id.dtype, name="cell_id"),
-            columns=y_columns,
-        )
+    #     total_rows += len(multi_test_x)
+    #     if rows_read < chunksize:
+    #         break
+    #     start += chunksize
 
-        for (index, row) in test_pred.iterrows():
-            row = row.reindex(eval_ids.gene_id[eval_ids.cell_id == index])
-            submission.loc[index] = row.values
-
-        total_rows += len(multi_test_x)
-        if rows_read < chunksize:
-            break
-        start += chunksize
-
-    submission.reset_index(drop=True, inplace=True)
-    submission.index.name = "row_id"
-    with open(multiome_path, "wb") as f:
-        pickle.dump(submission, f)
+    # submission.reset_index(drop=True, inplace=True)
+    # submission.index.name = "row_id"
+    # with open(multiome_path, "wb") as f:
+    #     pickle.dump(submission, f)
