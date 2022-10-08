@@ -14,8 +14,6 @@ from scipy.sparse import load_npz
 from tempfile import TemporaryDirectory
 from sklearn.model_selection import KFold
 from sklearn.metrics import mean_squared_error
-from sklearn.decomposition import PCA
-from sklearn.base import BaseEstimator, TransformerMixin
 
 from data.svd import run_svd
 from utils.decorators import mlflow_run, timer
@@ -24,30 +22,6 @@ from models.citeseq import ModelConstructor
 
 
 logger = logging.getLogger(__name__)
-
-
-class PreprocessMultiome(BaseEstimator, TransformerMixin):
-    columns_to_use = slice(10000, 14000)
-
-    @staticmethod
-    def take_column_subset(X):
-        return X[:, PreprocessMultiome.columns_to_use]
-
-    def transform(self, X):
-        X = X[:, ~self.all_zero_columns]
-        X = PreprocessMultiome.take_column_subset(X)
-
-        X = self.pca.transform(X)
-        return X
-
-    def fit_transform(self, X):
-        self.all_zero_columns = (X == 0).all(axis=0)
-        X = X[:, ~self.all_zero_columns]
-        X = PreprocessMultiome.take_column_subset(X)
-
-        self.pca = PCA(n_components=4, copy=False, random_state=1)
-        X = self.pca.fit_transform(X)
-        return X
 
 
 @timer
