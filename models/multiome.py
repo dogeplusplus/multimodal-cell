@@ -141,6 +141,7 @@ def multiome_submission(model_constructor: ModelConstructor, multiome_path: Path
     FP_EVALUATION_IDS = DATA_DIR / "evaluation_ids.csv"
     # Load raw multiome targets in order to extract column names
     FP_MULTIOME_TRAIN_TARGETS_RAW = DATA_DIR / "train_multi_targets.h5"
+    FP_MULTIOME_TEST_INPUTS_RAW = DATA_DIR / "test_multi_inputs.h5"
 
     pbar = tqdm(desc="Multiome Submission")
 
@@ -162,7 +163,7 @@ def multiome_submission(model_constructor: ModelConstructor, multiome_path: Path
     gc.collect()
 
     df_target = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS_RAW, start=0, stop=1)
-    index = extract_index(FP_MULTIOME_TRAIN_TARGETS_RAW)
+    index = extract_index(FP_MULTIOME_TEST_INPUTS_RAW)
 
     y_columns = df_target.columns
     del df_target
