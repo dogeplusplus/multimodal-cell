@@ -163,21 +163,13 @@ def multiome_submission(model_constructor: ModelConstructor, multiome_path: Path
     gc.collect()
 
     df_target = pd.read_hdf(FP_MULTIOME_TRAIN_TARGETS_RAW, start=0, stop=1)
-    index = extract_index(FP_MULTIOME_TEST_INPUTS_RAW)
+    test_index = extract_index(FP_MULTIOME_TEST_INPUTS_RAW)
 
     y_columns = df_target.columns
     del df_target
     gc.collect()
 
-    eval_ids = pd.read_csv(FP_EVALUATION_IDS, index_col="row_id")
-    eval_ids.cell_id = eval_ids.cell_id.astype(pd.CategoricalDtype())
-    eval_ids.gene_id = eval_ids.gene_id.astype(pd.CategoricalDtype())
-
-    cell_id_set = set(eval_ids.cell_id)
-    row_mask = index.isin(cell_id_set)
-
     X_test = load_npz(FP_MULTIOME_TEST_INPUTS)
-    X_test = X_test[row_mask]
     X_test = input_svd.transform(X_test)
     test_predictions = model.predict(X_test)
 
@@ -187,18 +179,20 @@ def multiome_submission(model_constructor: ModelConstructor, multiome_path: Path
     end_inference = time.time()
     pbar.set_postfix_str(f"Test predictions obtained after: {end_inference - end_training:.3f}s")
 
+    eval_ids = pd.read_csv(FP_EVALUATION_IDS, index_col="row_id")
+    eval_ids.cell_id = eval_ids.cell_id.astype(pd.CategoricalDtype())
+    eval_ids.gene_id = eval_ids.gene_id.astype(pd.CategoricalDtype())
+
     y_columns = pd.CategoricalIndex(y_columns, dtype=eval_ids.gene_id.dtype, name="gene_id")
-    submission = pd.Series(name="target", index=pd.MultiIndex.from_frame(eval_ids), dtype=np.float32)
+    submission = pd.Series(name="target", index=pd.MultiIndex.from_frame(eval_ids), dtype=np.float16)
 
-    test_pred = pd.DataFrame(
-        test_predictions,
-        index=pd.CategoricalIndex(index, dtype=eval_ids.cell_id.dtype, name="cell_id"),
-        columns=y_columns,
-    )
+    cell_dict = dict((k, v) for v, k in enumerate(test_index))
+    gene_dict = dict((k, v) for v, k in enumerate(y_columns))
 
-    for (index, row) in test_pred.iterrows():
-        row = row.reindex(eval_ids.gene_id[eval_ids.cell_id == index])
-        submission.loc[index] = row.values
+    eval_ids_cell_num = eval_ids.cell_id.apply(lambda x: cell_dict.get(x, -1))
+    eval_ids_gene_num = eval_ids.gene_id.apply(lambda x: gene_dict.get(x, -1))
+    valid_multi_rows = (eval_ids_gene_num != -1) & (eval_ids_cell_num != -1)
+    submission.iloc[valid_multi_rows] = test_predictions[eval_ids_cell_num[valid_multi_rows].to_numpy()]
 
     submission.reset_index(drop=True, inplace=True)
     submission.index.name = "row_id"
